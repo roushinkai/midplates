@@ -1,6 +1,6 @@
 # ShaguPlates-Midplates
 
-<a href="preview/rounded.jpg"><img src="preview/image.png" float="right" align="right" width="320"></a>
+<img src="preview/midplates.png" float="right" align="right" width="320"></a>
 
 ShaguPlates configuration to resemble the default Midnight nameplates.
 

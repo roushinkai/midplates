@@ -32,10 +32,20 @@ ShaguPlates:RegisterModule("nameplates", "vanilla:tbc", function ()
   local parentcount = 0
   local platecount = 0
   local registry = {}
-  local debuffdurations = C.appearance.cd.debuffs == "1" and true or nil
+  local debuffdurations = C.nameplates.disable_debuff_timers == "1" and false or (C.appearance.cd.debuffs == "1" and true or nil)
+
+  -- Add separate settings for name and health text positions
+  C.nameplates.nameTextPosition = C.nameplates.nameTextPosition or "LEFT"
+  C.nameplates.hptextpos = C.nameplates.hptextpos or "RIGHT"
+  C.nameplates.castbariconposition = C.nameplates.castbariconposition or "outside"
 
   -- cache default border color
   local er, eg, eb, ea = GetStringColor(ShaguPlates_config.appearance.border.color)
+
+  -- hardcoded debuff border settings
+  local debuffBorderAlpha = 0.4
+  local debuffBorderColor = {.5, .5, .5, .4}
+  local debuffBorderThickness = 0.1
 
   local function GetCombatStateColor(guid)
     local target = guid.."target"
@@ -88,13 +98,13 @@ ShaguPlates:RegisterModule("nameplates", "vanilla:tbc", function ()
     end
   end
 
-  local function TotemPlate(name)
-    if C.nameplates.totemicons == "1" then
-      for totem, icon in pairs(L["totems"]) do
-        if string.find(name, totem) then return icon end
-      end
+local function TotemPlate(name)
+  if C.nameplates.totemicons == "1" then
+    for totem, icon in pairs(L["totems"]) do
+      if string.find(name, totem) then return icon end
     end
   end
+end
 
   local function HidePlate(unittype, name, fullhp, target)
     -- keep some plates always visible according to config
@@ -132,7 +142,13 @@ ShaguPlates:RegisterModule("nameplates", "vanilla:tbc", function ()
 
   local function GetNameString(name)
     local abbrev = ShaguPlates_config.unitframes.abbrevname == "1" or nil
-    local size = 20
+    local removelast = ShaguPlates_config.nameplates.removelastname == "1" or nil
+    local size = 5
+
+    if removelast and name then
+      local _, _, last = string.find(name, "(%S+)$")
+      name = last or name
+    end
 
     -- first try to only abbreviate the first word
     if abbrev and name and strlen(name) > size then
@@ -237,9 +253,11 @@ ShaguPlates:RegisterModule("nameplates", "vanilla:tbc", function ()
     plate.debuffs[index] = CreateFrame("Frame", plate.platename.."Debuff"..index, plate)
     plate.debuffs[index]:Hide()
     plate.debuffs[index]:SetFrameLevel(1)
+    CreateBackdrop(plate.debuffs[index], debuffBorderAlpha, nil, nil, { edgeFile = "Interface\\Buttons\\WHITE8X8", tile = false, tileSize = 0, edgeSize = debuffBorderThickness, insets = { left = 0, right = 0, top = 0, bottom = 0 } })
+    plate.debuffs[index].backdrop:SetBackdropBorderColor(unpack(debuffBorderColor))
 
     plate.debuffs[index].icon = plate.debuffs[index]:CreateTexture(nil, "BACKGROUND")
-    plate.debuffs[index].icon:SetTexture(.3,1,.8,1)
+    plate.debuffs[index].icon:SetTexture(.3,1,.8,.4)
     plate.debuffs[index].icon:SetAllPoints(plate.debuffs[index])
 
     plate.debuffs[index].stacks = plate.debuffs[index]:CreateFontString(nil, "OVERLAY")
@@ -264,12 +282,66 @@ ShaguPlates:RegisterModule("nameplates", "vanilla:tbc", function ()
     plate.debuffs[index].cd.pfCooldownType = "ALL"
   end
 
+  local function UpdateNamePosition(nameplate)
+    local name_halign = C.nameplates.nametexthalign or "CENTER"
+    local name_valign = C.nameplates.nametextvalign or "above"
+    local health_halign = C.nameplates.hptextpos or "CENTER"
+    local font_size = C.nameplates.use_unitfonts == "1" and C.global.font_unit_size or C.global.font_size
+    local width = nameplate.health:GetWidth()
+
+    -- Position name based on vertical alignment
+    nameplate.name:SetParent(nameplate.health)
+    nameplate.name:ClearAllPoints()
+    nameplate.name:SetJustifyH(name_halign)
+    nameplate.name:SetJustifyV("MIDDLE")
+    nameplate.name:SetWidth(width)  -- Set width to health bar width
+
+    if name_valign == "above" then
+      if name_halign == "LEFT" then
+        nameplate.name:SetPoint("BOTTOMLEFT", nameplate.health, "TOP", -width/2, 2)
+      elseif name_halign == "RIGHT" then
+        nameplate.name:SetPoint("BOTTOMRIGHT", nameplate.health, "TOP", width/2, 2)
+      else -- CENTER
+        nameplate.name:SetPoint("BOTTOM", nameplate.health, "TOP", 0, 2)
+      end
+    elseif name_valign == "inside" then
+      if name_halign == "LEFT" then
+        nameplate.name:SetPoint("LEFT", nameplate.health, "LEFT", 1, 0.5)
+      elseif name_halign == "RIGHT" then
+        nameplate.name:SetPoint("RIGHT", nameplate.health, "RIGHT", -1, 0.5)
+      else -- CENTER
+        nameplate.name:SetAllPoints(nameplate.health)
+      end
+    elseif name_valign == "below" then
+      if name_halign == "LEFT" then
+        nameplate.name:SetPoint("TOPLEFT", nameplate.health, "BOTTOM", -width/2, -2)
+      elseif name_halign == "RIGHT" then
+        nameplate.name:SetPoint("TOPRIGHT", nameplate.health, "BOTTOM", width/2, -2)
+      else -- CENTER
+        nameplate.name:SetPoint("TOP", nameplate.health, "BOTTOM", 0, -2)
+      end
+    end
+
+    -- Position health bar at the top
+    nameplate.health:ClearAllPoints()
+    nameplate.health:SetPoint("TOP", nameplate, "TOP", 0, 0)
+
+    nameplate.level:ClearAllPoints()
+    nameplate.level:SetPoint("RIGHT", nameplate.health, "LEFT", -5, 0)
+
+    nameplate.guild:ClearAllPoints()
+    nameplate.guild:SetPoint("BOTTOM", nameplate.health, "BOTTOM", 0, -(font_size + 4))
+  end
+
+
+
   local function UpdateDebuffConfig(nameplate, i)
     if not nameplate.debuffs[i] then return end
 
     -- update debuff positions
     local width = tonumber(C.nameplates.width)
     local debuffsize = tonumber(C.nameplates.debuffsize)
+    local debuffwidth = tonumber(C.nameplates.debuffwidth)
     local debuffoffset = tonumber(C.nameplates.debuffoffset)
     local limit = floor(width / debuffsize)
     local font = C.nameplates.use_unitfonts == "1" and ShaguPlates.font_unit or ShaguPlates.font_default
@@ -288,12 +360,12 @@ ShaguPlates:RegisterModule("nameplates", "vanilla:tbc", function ()
     if i == 1 then
       nameplate.debuffs[i]:SetPoint(aligna, nameplate.health, alignb, 0, offs)
     elseif i <= limit then
-      nameplate.debuffs[i]:SetPoint("LEFT", nameplate.debuffs[i-1], "RIGHT", 1, 0)
+      nameplate.debuffs[i]:SetPoint("LEFT", nameplate.debuffs[i-1], "RIGHT", tonumber(C.nameplates.debuffspacing), 0)
     elseif i > limit and limit > 0 then
       nameplate.debuffs[i]:SetPoint(aligna, nameplate.debuffs[i-limit], alignb, 0, space)
     end
 
-    nameplate.debuffs[i]:SetWidth(tonumber(C.nameplates.debuffsize))
+    nameplate.debuffs[i]:SetWidth(debuffwidth)
     nameplate.debuffs[i]:SetHeight(tonumber(C.nameplates.debuffsize))
   end
 
@@ -394,7 +466,8 @@ ShaguPlates:RegisterModule("nameplates", "vanilla:tbc", function ()
     nameplate.health.text:SetAllPoints()
     nameplate.health.text:SetTextColor(1,1,1,1)
 
-    nameplate.name = nameplate:CreateFontString(nil, "OVERLAY")
+    nameplate.name = nameplate.health:CreateFontString(nil, "OVERLAY")
+    nameplate.name:SetDrawLayer("OVERLAY", 1)
     nameplate.name:SetPoint("TOP", nameplate, "TOP", 0, 0)
 
     nameplate.glow = nameplate:CreateTexture(nil, "BACKGROUND")
@@ -472,6 +545,11 @@ ShaguPlates:RegisterModule("nameplates", "vanilla:tbc", function ()
       castbar.spell:SetNonSpaceWrap(false)
       castbar.spell:SetTextColor(1,1,1,1)
 
+      castbar.target = castbar:CreateFontString("Status", "DIALOG", "GameFontNormal")
+      castbar.target:SetPoint("RIGHT", castbar, "RIGHT", -2, 0)
+      castbar.target:SetNonSpaceWrap(false)
+      castbar.target:SetTextColor(1,1,1,1)
+
       castbar.icon = CreateFrame("Frame", nil, castbar)
       castbar.icon.tex = castbar.icon:CreateTexture(nil, "BORDER")
       castbar.icon.tex:SetAllPoints()
@@ -500,8 +578,10 @@ ShaguPlates:RegisterModule("nameplates", "vanilla:tbc", function ()
     local rawborder, default_border = GetBorderSize("nameplates")
 
     local plate_width = C.nameplates.width + 50
-    local plate_height = C.nameplates.heighthealth + font_size + 5
-    local plate_height_cast = C.nameplates.heighthealth + font_size + 5 + C.nameplates.heightcast + 5
+    local name_above = true  -- Name is now always positioned above the health bar
+    local padding = 2
+    local plate_height = C.nameplates.heighthealth + (name_above and font_size + padding or 0) + 5
+    local plate_height_cast = C.nameplates.heighthealth + (name_above and font_size + padding or 0) + 5 + C.nameplates.heightcast + 5
     local combo_size = 5
 
     local width = tonumber(C.nameplates.width)
@@ -520,9 +600,12 @@ ShaguPlates:RegisterModule("nameplates", "vanilla:tbc", function ()
     nameplate:SetPoint("TOP", parent, "TOP", 0, 0)
 
     nameplate.name:SetFont(font, font_size, font_style)
+    nameplate.name.original_font = font
+    nameplate.name.original_font_size = font_size
+    nameplate.name.original_font_style = font_style
+    nameplate.name.original_width = C.nameplates.width
 
     nameplate.health:SetOrientation(orientation)
-    nameplate.health:SetPoint("TOP", nameplate.name, "BOTTOM", 0, healthoffset)
     nameplate.health:SetStatusBarTexture(hptexture)
     nameplate.health:SetWidth(C.nameplates.width)
     nameplate.health:SetHeight(C.nameplates.heighthealth)
@@ -530,8 +613,14 @@ ShaguPlates:RegisterModule("nameplates", "vanilla:tbc", function ()
 
     CreateBackdrop(nameplate.health, default_border)
 
-    nameplate.health.text:SetFont(font, font_size - 2, "OUTLINE")
+    -- Apply custom healthbar backdrop color
+    local hr, hg, hb, ha = strsplit(",", C.nameplates.healthbar_backdrop or "0,0,0,1")
+    nameplate.health.backdrop:SetBackdropColor(tonumber(hr), tonumber(hg), tonumber(hb), tonumber(ha))
+
+    nameplate.health.text:SetFont(font, font_size, "OUTLINE")
     nameplate.health.text:SetJustifyH(C.nameplates.hptextpos)
+    nameplate.health.text:SetWidth(C.nameplates.width)
+    nameplate.health.text:SetPoint("CENTER", nameplate.health, "CENTER", 0, 0)
 
     nameplate.guild:SetFont(font, font_size, font_style)
 
@@ -549,6 +638,14 @@ ShaguPlates:RegisterModule("nameplates", "vanilla:tbc", function ()
       UpdateDebuffConfig(nameplate, i)
     end
 
+    -- Update debuff borders based on config
+    for i=1,16 do
+      if nameplate.debuffs[i] then
+        CreateBackdrop(nameplate.debuffs[i], debuffBorderAlpha, nil, nil, { edgeFile = "Interface\\Buttons\\WHITE8X8", tile = false, tileSize = 0, edgeSize = debuffBorderThickness, insets = { left = 0, right = 0, top = 0, bottom = 0 } })
+        nameplate.debuffs[i].backdrop:SetBackdropBorderColor(unpack(debuffBorderColor))
+      end
+    end
+
     for i=1,5 do
       nameplate.combopoints[i]:SetWidth(combo_size)
       nameplate.combopoints[i]:SetHeight(combo_size)
@@ -563,13 +660,67 @@ ShaguPlates:RegisterModule("nameplates", "vanilla:tbc", function ()
     nameplate.castbar:SetStatusBarColor(.9,.8,0,1)
     CreateBackdrop(nameplate.castbar, default_border)
 
+    -- Apply custom castbar backdrop color
+    local cr, cg, cb, ca = strsplit(",", C.nameplates.castbar_backdrop or "0,0,0,1")
+    nameplate.castbar.backdrop:SetBackdropColor(tonumber(cr), tonumber(cg), tonumber(cb), tonumber(ca))
+
+    -- Set castbar border color to match castbar color
+    nameplate.castbar.backdrop:SetBackdropBorderColor(.9,.8,0,1)
+
     nameplate.castbar.text:SetFont(font, font_size, "OUTLINE")
     nameplate.castbar.spell:SetFont(font, font_size, "OUTLINE")
-    nameplate.castbar.icon:SetPoint("BOTTOMLEFT", nameplate.castbar, "BOTTOMRIGHT", default_border*3, 0)
-    nameplate.castbar.icon:SetPoint("TOPLEFT", nameplate.health, "TOPRIGHT", default_border*3, 0)
-    nameplate.castbar.icon:SetWidth(C.nameplates.heightcast + default_border*3 + C.nameplates.heighthealth)
-    CreateBackdrop(nameplate.castbar.icon, default_border)
+    nameplate.castbar.target:SetFont(font, font_size, "OUTLINE")
 
+    -- Position spell name based on config
+    nameplate.castbar.spell:ClearAllPoints()
+    local halign = C.nameplates.spellnamehalign or "CENTER"
+    if C.nameplates.spellnameposition == "above" then
+      if halign == "LEFT" then
+        nameplate.castbar.spell:SetPoint("BOTTOMLEFT", nameplate.castbar, "TOPLEFT", 0, 2)
+      elseif halign == "RIGHT" then
+        nameplate.castbar.spell:SetPoint("BOTTOMRIGHT", nameplate.castbar, "TOPRIGHT", 0, 2)
+      else -- CENTER
+        nameplate.castbar.spell:SetPoint("BOTTOM", nameplate.castbar, "TOP", 0, 2)
+      end
+    elseif C.nameplates.spellnameposition == "outside" then
+      if halign == "LEFT" then
+        nameplate.castbar.spell:SetPoint("TOPLEFT", nameplate.castbar, "BOTTOMLEFT", 0, -2)
+      elseif halign == "RIGHT" then
+        nameplate.castbar.spell:SetPoint("TOPRIGHT", nameplate.castbar, "BOTTOMRIGHT", 0, -2)
+      else -- CENTER
+        nameplate.castbar.spell:SetPoint("TOP", nameplate.castbar, "BOTTOM", 0, -2)
+      end
+    else -- "inside"
+      if halign == "LEFT" then
+        if C.nameplates.castbariconposition == "inside" then
+          nameplate.castbar.spell:SetPoint("LEFT", nameplate.castbar.icon, "RIGHT", 1, 0)
+        else
+          nameplate.castbar.spell:SetPoint("LEFT", nameplate.castbar, "LEFT", 2, 0)
+        end
+      elseif halign == "RIGHT" then
+        nameplate.castbar.spell:SetPoint("RIGHT", nameplate.castbar, "RIGHT", -2, 0)
+      else -- CENTER
+        nameplate.castbar.spell:SetPoint("CENTER", nameplate.castbar, "CENTER")
+      end
+    end
+    nameplate.castbar.spell:SetJustifyH(halign)
+
+    if C.nameplates.castbariconposition == "inside" then
+      nameplate.castbar.icon:SetPoint("BOTTOMLEFT", nameplate.castbar, "BOTTOMLEFT", -default_border, 0)
+      nameplate.castbar.icon:SetPoint("TOPLEFT", nameplate.castbar, "TOPLEFT", -default_border, 0)
+      nameplate.castbar.icon:SetWidth(C.nameplates.heightcast)
+    else
+      nameplate.castbar.icon:SetPoint("BOTTOMLEFT", nameplate.castbar, "BOTTOMRIGHT", default_border*3, 0)
+      nameplate.castbar.icon:SetPoint("TOPLEFT", nameplate.health, "TOPRIGHT", default_border*3, 0)
+      nameplate.castbar.icon:SetWidth(C.nameplates.heightcast + default_border*3 + C.nameplates.heighthealth)
+    end
+
+    CreateBackdrop(nameplate.castbar.icon, tonumber(C.nameplates.iconborderalpha))
+
+    -- Set spell icon border color to match castbar color
+    nameplate.castbar.icon.backdrop:SetBackdropBorderColor(.9,.8,0,1)
+
+    UpdateNamePosition(nameplate)
     nameplates:OnDataChanged(nameplate)
   end
 
@@ -693,8 +844,8 @@ ShaguPlates:RegisterModule("nameplates", "vanilla:tbc", function ()
       end
       plate.totem:Hide()
     else
+      local name_halign = C.nameplates.nametexthalign or "CENTER"
       plate.level:SetPoint("RIGHT", plate.health, "LEFT", -5, 0)
-      plate.name:SetParent(plate.health)
       plate.guild:SetPoint("BOTTOM", plate.health, "BOTTOM", 0, -(font_size + 4))
 
       plate.level:Show()
@@ -702,10 +853,17 @@ ShaguPlates:RegisterModule("nameplates", "vanilla:tbc", function ()
       plate.health:Show()
       plate.glow:SetPoint("CENTER", plate.health, "CENTER", 0, 0)
       plate.totem:Hide()
+
+      UpdateNamePosition(plate)
     end
 
     plate.name:SetText(GetNameString(name))
-    plate.level:SetText(string.format("%s%s", level, (elitestrings[elite] or "")))
+    if C.nameplates.hidelevel == "1" then
+      plate.level:Hide()
+    else
+      plate.level:SetText(string.format("%s%s", level, (elitestrings[elite] or "")))
+      plate.level:Show()
+    end
 
     if guild and C.nameplates.showguildname == "1" then
       plate.guild:SetText(guild)
@@ -866,6 +1024,7 @@ ShaguPlates:RegisterModule("nameplates", "vanilla:tbc", function ()
     local target = UnitExists("target") and frame:GetAlpha() == 1 or nil
     local mouseover = UnitExists("mouseover") and original.glow:IsShown() or nil
     local namefightcolor = C.nameplates.namefightcolor == "1"
+    local disabletargetyellow = C.nameplates.disabletargetyellow == "1"
 
     -- trigger queued event update
     if nameplate.eventcache then
@@ -921,14 +1080,22 @@ ShaguPlates:RegisterModule("nameplates", "vanilla:tbc", function ()
     if r + g + b ~= nameplate.cache.namecolor then
       nameplate.cache.namecolor = r + g + b
 
-      if namefightcolor then
+      if namefightcolor and C.nameplates.disableaggrored ~= "1" then
         if r > .9 and g < .2 and b < .2 then
           nameplate.name:SetTextColor(1,0.4,0.2,1) -- infight
         else
-          nameplate.name:SetTextColor(r,g,b,1)
+          if not disabletargetyellow and r >= 0.9 and g >= 0.9 and b <= 0.1 then
+            nameplate.name:SetTextColor(r, g, b, 1)
+          else
+            nameplate.name:SetTextColor(1,1,1,1)
+          end
         end
       else
-        nameplate.name:SetTextColor(1,1,1,1)
+        if not disabletargetyellow and r >= 0.9 and g >= 0.9 and b <= 0.1 then
+          nameplate.name:SetTextColor(r, g, b, 1)
+        else
+          nameplate.name:SetTextColor(1,1,1,1)
+        end
       end
       update = true
     end
@@ -991,6 +1158,13 @@ ShaguPlates:RegisterModule("nameplates", "vanilla:tbc", function ()
         nameplate.health.zoomTransition = nil
         nameplate.health.zoomed = true
       end
+
+      -- scale name text
+      if not nameplate.name.zoomed then
+        nameplate.name:SetFont(nameplate.name.original_font, nameplate.name.original_font_size * 1.1, nameplate.name.original_font_style)
+        nameplate.name:SetWidth(nameplate.name.original_width * zoomval)
+        nameplate.name.zoomed = true
+      end
     elseif nameplate.health.zoomed or nameplate.health.zoomTransition then
       local wc = tonumber(C.nameplates.width)
       local hc = tonumber(C.nameplates.heighthealth)
@@ -1014,11 +1188,19 @@ ShaguPlates:RegisterModule("nameplates", "vanilla:tbc", function ()
         nameplate.health.zoomTransition = nil
         nameplate.health.zoomed = nil
       end
+
+      -- reset name text
+      if nameplate.name.zoomed then
+        nameplate.name:SetFont(nameplate.name.original_font, nameplate.name.original_font_size, nameplate.name.original_font_style)
+        nameplate.name:SetWidth(nameplate.name.original_width)
+        nameplate.name.zoomed = nil
+      end
     end
 
     -- castbar update
     if C.nameplates["showcastbar"] == "1" and ( C.nameplates["targetcastbar"] == "0" or target ) then
       local channel, cast, nameSubtext, text, texture, startTime, endTime, isTradeSkill
+      local unitstr = target and "target" or mouseover and "mouseover" or nil
 
       -- detect cast or channel bars
       cast, nameSubtext, text, texture, startTime, endTime, isTradeSkill = UnitCastingInfo(target and "target" or name)
@@ -1026,8 +1208,9 @@ ShaguPlates:RegisterModule("nameplates", "vanilla:tbc", function ()
 
       -- read enemy casts from SuperWoW if enabled
       if superwow_active then
-        cast, nameSubtext, text, texture, startTime, endTime, isTradeSkill = UnitCastingInfo(nameplate.parent:GetName(1))
-        if not cast then channel, nameSubtext, text, texture, startTime, endTime, isTradeSkill = UnitChannelInfo(nameplate.parent:GetName(1)) end
+        unitstr = nameplate.parent:GetName(1)
+        cast, nameSubtext, text, texture, startTime, endTime, isTradeSkill = UnitCastingInfo(unitstr)
+        if not cast then channel, nameSubtext, text, texture, startTime, endTime, isTradeSkill = UnitChannelInfo(unitstr) end
       end
 
       if not cast and not channel then
@@ -1043,12 +1226,35 @@ ShaguPlates:RegisterModule("nameplates", "vanilla:tbc", function ()
 
         nameplate.castbar:SetMinMaxValues(0,  duration/1000)
         nameplate.castbar:SetValue(cur)
-        nameplate.castbar.text:SetText(round(cur,1))
+        if C.nameplates.showtimer == "1" then
+          nameplate.castbar.text:SetText(round(cur,1))
+        else
+          nameplate.castbar.text:SetText("")
+        end
         if C.nameplates.spellname == "1" then
           nameplate.castbar.spell:SetText(effect)
         else
           nameplate.castbar.spell:SetText("")
         end
+
+        -- show cast target
+        if C.nameplates.showcasttarget == "1" and unitstr then
+          local targetunit = unitstr .. "target"
+          if UnitExists(targetunit) then
+            local targetname = UnitName(targetunit)
+            if targetname then
+              local _, _, last = string.find(targetname, "(%S+)$")
+              nameplate.castbar.target:SetText(last or targetname)
+            else
+              nameplate.castbar.target:SetText("")
+            end
+          else
+            nameplate.castbar.target:SetText("")
+          end
+        else
+          nameplate.castbar.target:SetText("")
+        end
+
         nameplate.castbar:Show()
 
         if texture then
